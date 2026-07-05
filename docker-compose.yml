@@ -4,9 +4,10 @@ services:
     container_name: bakkum-watcher
     restart: unless-stopped
     environment:
-      ARRIVAL: "2026-07-25"
-      DEPARTURE: "2026-07-31"
-      CHECK_INTERVAL: "300"          # seconds; 5 min is polite enough
+      WINDOW_START: "2026-07-25"
+      WINDOW_END: "2026-07-31"
+      MIN_NIGHTS: "4"                # auch kürzere Lücken (>= 4 Nächte) melden
+      CHECK_INTERVAL: "600"          # seconds; jeder Zyklus prüft 6 Datumskombis
       NTFY_URL: "https://ntfy.sh/CHANGE-ME-bakkum-a8x2"   # or your self-hosted ntfy topic
       # HA_WEBHOOK_URL: "https://ha.vansummeren.ch/api/webhook/bakkum_watch"
       # DISCOVERY: "1"               # enable once for first run, then remove

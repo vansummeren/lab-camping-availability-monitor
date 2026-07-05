@@ -57,10 +57,18 @@ fängt alle JSON-XHR-Antworten ab und wertet zusätzlich das gerenderte DOM aus
 
 ## Verhalten
 
-- Benachrichtigt nur beim Übergang **belegt → frei** pro Kategorie
-  (State in `/data/state.json`), kein Spam bei jedem Lauf.
-- `CHECK_INTERVAL=300` (5 min) ist ein guter Kompromiss — aggressiver
-  bringt kaum Vorteil und belastet die Seite unnötig.
+- **Teilzeiträume**: geprüft wird nicht nur die volle Woche, sondern jede
+  mögliche Aufenthaltsdauer ≥ `MIN_NIGHTS` innerhalb `WINDOW_START`–`WINDOW_END`.
+  Bei 25.–31.07. und `MIN_NIGHTS=4` sind das 6 Kombinationen
+  (1× 6 Nächte, 2× 5, 3× 4) — wird also z. B. nur 26.–30.07. frei,
+  gibt's trotzdem eine Meldung.
+- Benachrichtigt nur beim Übergang **belegt → frei** pro
+  (Kategorie, Zeitraum)-Kombination (State in `/data/state.json`), kein Spam.
+  Gemeldet werden nur *maximale* Zeiträume: Wird die volle Woche frei, kommt
+  eine Meldung für 6 Nächte — nicht zusätzlich für alle enthaltenen kürzeren.
+- `CHECK_INTERVAL=600` (10 min): jeder Zyklus lädt die Seite 6× (eine pro
+  Datumskombination), das dauert ~1–2 min. Aggressiver bringt kaum Vorteil
+  und belastet die Seite unnötig.
 - `NOTIFY_ON_ERROR=1` meldet, wenn der Check selbst scheitert
   (Seitenumbau, Selektoren kaputt etc.).
 
@@ -113,7 +121,7 @@ authentifizieren (siehe Schritt 2).
    - **Authentication**: bei privatem Repo anhaken und PAT (GitHub: Settings →
      Developer settings → Personal access tokens, Scope `repo`) oder Deploy-Key hinterlegen.
 4. **Environment variables**: hier `NTFY_URL` (und ggf. `HA_WEBHOOK_URL`,
-   `ARRIVAL`/`DEPARTURE` falls andere Woche) setzen — überschreibt/ergänzt die
+   `WINDOW_START`/`WINDOW_END`/`MIN_NIGHTS` falls andere Woche) setzen — überschreibt/ergänzt die
    Defaults aus der `docker-compose.yml`. Alternativ direkt in der
    `docker-compose.yml` im Repo pflegen, wenn dir das lieber ist.
 5. **GitOps updates** (optional, aber empfehlenswert): "Enable automatic
