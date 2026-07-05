@@ -4,11 +4,11 @@ services:
     container_name: bakkum-watcher
     restart: unless-stopped
     environment:
-      WINDOW_START: "2026-07-25"
-      WINDOW_END: "2026-07-31"
-      MIN_NIGHTS: "4"                # auch kürzere Lücken (>= 4 Nächte) melden
-      CHECK_INTERVAL: "300"          # 8 leichte API-Calls pro Zyklus
-      NTFY_URL: "https://ntfy.sh/CHANGE-ME-bakkum-a8x2"
+      #WINDOW_START: "2026-07-25"
+      #WINDOW_END: "2026-07-31"
+      #MIN_NIGHTS: "4"                # auch kürzere Lücken (>= 4 Nächte) melden
+      #CHECK_INTERVAL: "300"          # 8 leichte API-Calls pro Zyklus
+      #NTFY_URL: "https://ntfy.sh/CHANGE-ME-bakkum-a8x2"
       # HA_WEBHOOK_URL: "http://homeassistant.lan:8123/api/webhook/bakkum_watch_8f3k2m9x"
       # LEVELS: "257,265,21636,10514,259,260,266,258"   # Kategorien einschränken, z.B. nur "257,259"
       # NOTIFY_ON_ERROR: "1"
