@@ -95,7 +95,8 @@ def notify(title: str, body: str, priority: str = "high") -> None:
                                   "url": BOOKING_URL}).encode()
             req = urllib.request.Request(
                 HA_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json"}, method="POST")
+                headers={"Content-Type": "application/json",
+                         "User-Agent": HEADERS["User-Agent"]}, method="POST")
             urllib.request.urlopen(req, timeout=15)
             log(f"HA webhook sent: {title}")
         except Exception as e:
