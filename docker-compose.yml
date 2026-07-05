@@ -3,7 +3,7 @@ services:
     build: .
     container_name: bakkum-watcher
     restart: unless-stopped
-    environment:
+    #environment:
       #WINDOW_START: "2026-07-25"
       #WINDOW_END: "2026-07-31"
       #MIN_NIGHTS: "4"                # auch kürzere Lücken (>= 4 Nächte) melden
