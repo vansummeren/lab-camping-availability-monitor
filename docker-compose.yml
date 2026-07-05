@@ -1,0 +1,19 @@
+services:
+  bakkum-watcher:
+    build: .
+    container_name: bakkum-watcher
+    restart: unless-stopped
+    environment:
+      ARRIVAL: "2026-07-25"
+      DEPARTURE: "2026-07-31"
+      CHECK_INTERVAL: "300"          # seconds; 5 min is polite enough
+      NTFY_URL: "https://ntfy.sh/CHANGE-ME-bakkum-a8x2"   # or your self-hosted ntfy topic
+      # HA_WEBHOOK_URL: "https://ha.vansummeren.ch/api/webhook/bakkum_watch"
+      # DISCOVERY: "1"               # enable once for first run, then remove
+      # NOTIFY_ON_ERROR: "1"
+    volumes:
+      - bakkum_data:/data
+    shm_size: 1gb                    # Chromium needs shared memory
+
+volumes:
+  bakkum_data:
