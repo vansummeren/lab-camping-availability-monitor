@@ -171,54 +171,108 @@ def scan_dom(page) -> dict:
             name = (h.inner_text() or "").strip()
         except Exception:
             continue
-        if not name or len(name) > 60:
+        if not name or len(name) > 60 or HEADING_BLACKLIST.search(name):
             continue
-        container = h
-        for _ in range(4):
-            parent = container.evaluate_handle("el => el.parentElement")
-            if parent is None:
-                break
-            container = parent.as_element() or container
         try:
-            text = container.inner_text()
+            handle = h.evaluate_handle(
+                "el => el.closest('article, li, [class*=card], [class*=teaser], "
+                "[class*=accommodation], [class*=platz], [class*=plaats], "
+                "[class*=item]') || el.parentElement")
+            container = handle.as_element()
+            text = container.inner_text() if container else ""
         except Exception:
+            continue
+        if not text or len(text) > 1500:      # page-level wrapper -> not a card
             continue
         if NEGATIVE.search(text):
             results[name] = False
-        elif PRICE.search(text) and ("Buchen" in text or "vanaf" in text or "ab " in text):
+        elif PRICE.search(text) and re.search(r"buchen|reservieren|boeken", text, re.I):
             results[name] = True
     return results
 
 
-def set_dates(page, arrival: str, departure: str) -> None:
-    """Best-effort interaction with the site's date widget."""
-    trigger = page.get_by_text(re.compile(r"Datum hinzufügen|Datum wählen|An- .*Abreise", re.I)).first
-    trigger.click(timeout=5_000)
-    page.wait_for_timeout(1_000)
-    target = date.fromisoformat(arrival)
-    month_re = {7: r"Juli\s*2026|July\s*2026|juli\s*2026"}.get(target.month, r"Juli\s*2026")
-    for _ in range(14):
-        if page.locator(f"text=/{month_re}/i").count() > 0:
+HEADING_BLACKLIST = re.compile(
+    r"deine ferien|gut zu wissen|häufig gestellte|faq|kontakt|newsletter|"
+    r"bewertung|umgebung|anfahrt|öffnungszeiten|impressionen|entdecke",
+    re.IGNORECASE,
+)
+
+
+def _click_first_visible(page, locator) -> bool:
+    """Click the first visible match; fall back to a JS click on hidden ones."""
+    try:
+        n = locator.count()
+    except Exception:
+        return False
+    for i in range(n):
+        el = locator.nth(i)
+        try:
+            if el.is_visible():
+                el.scroll_into_view_if_needed(timeout=2_000)
+                el.click(timeout=3_000)
+                return True
+        except Exception:
+            continue
+    if n > 0:
+        try:
+            locator.first.evaluate(
+                "el => (el.closest('button,a,[role=button],label,div') || el).click()")
+            return True
+        except Exception:
+            pass
+    return False
+
+
+def set_dates(page, arrival: str, departure: str) -> bool:
+    """Interact with the site's date widget. Returns True only if the full
+    sequence (open -> pick arrival -> pick departure) succeeded."""
+    opened = False
+    for candidate in (page.locator("[data-info-data-arrival]"),
+                      page.get_by_text(re.compile(
+                          r"Datum hinzufügen|Datum wählen|An- .*Abreise", re.I))):
+        if _click_first_visible(page, candidate):
+            opened = True
             break
-        nxt = page.locator("[class*=next], [aria-label*=next], [aria-label*=weiter], [aria-label*=volgende]").first
-        nxt.click(timeout=3_000)
-        page.wait_for_timeout(400)
-    arr_day = str(int(arrival.split("-")[2]))
-    dep_day = str(int(departure.split("-")[2]))
-    cells = "td, button, [role=gridcell]"
-    page.locator(cells).filter(has_text=re.compile(rf"^{arr_day}$")).first.click(timeout=3_000)
-    page.wait_for_timeout(500)
-    page.locator(cells).filter(has_text=re.compile(rf"^{dep_day}$")).first.click(timeout=3_000)
-    page.wait_for_timeout(500)
-    for label in ("Suchen", "Zoeken", "Anwenden", "Übernehmen", "OK"):
-        btn = page.get_by_text(label, exact=False)
-        if btn.count() > 0:
-            try:
-                btn.first.click(timeout=2_000)
+    if not opened:
+        return False
+    page.wait_for_timeout(1_000)
+
+    try:
+        target = date.fromisoformat(arrival)
+        month_names = {6: "Juni", 7: "Juli", 8: "August", 9: "September"}
+        month_re = rf"{month_names.get(target.month, 'Juli')}\s*{target.year}"
+        for _ in range(14):
+            if page.locator(f"text=/{month_re}/i").count() > 0:
                 break
-            except Exception:
-                pass
-    page.wait_for_load_state("networkidle", timeout=30_000)
+            nxt = page.locator(
+                "[class*=next], [aria-label*=next], [aria-label*=weiter], "
+                "[aria-label*=volgende]").first
+            nxt.click(timeout=3_000)
+            page.wait_for_timeout(400)
+        else:
+            return False
+
+        arr_day = str(int(arrival.split("-")[2]))
+        dep_day = str(int(departure.split("-")[2]))
+        cells = "td, button, [role=gridcell]"
+        page.locator(cells).filter(
+            has_text=re.compile(rf"^{arr_day}$")).first.click(timeout=3_000)
+        page.wait_for_timeout(500)
+        page.locator(cells).filter(
+            has_text=re.compile(rf"^{dep_day}$")).first.click(timeout=3_000)
+        page.wait_for_timeout(500)
+        for label in ("Suchen", "Zoeken", "Anwenden", "Übernehmen", "OK"):
+            btn = page.get_by_text(label, exact=False)
+            if btn.count() > 0:
+                try:
+                    btn.first.click(timeout=2_000)
+                    break
+                except Exception:
+                    pass
+        page.wait_for_load_state("networkidle", timeout=30_000)
+        return True
+    except Exception:
+        return False
 
 
 def check_range(page, payloads: list, arrival: str, departure: str) -> dict:
@@ -227,10 +281,11 @@ def check_range(page, payloads: list, arrival: str, departure: str) -> dict:
     url = (f"{PAGE_URL}?arrival={arrival}&departure={departure}"
            f"&aankomst={arrival}&vertrek={departure}&persons=2")
     page.goto(url, wait_until="networkidle", timeout=60_000)
+    dates_ok = False
     try:
-        set_dates(page, arrival, departure)
+        dates_ok = set_dates(page, arrival, departure)
     except Exception as e:
-        log(f"  date-widget interaction incomplete for {arrival}→{departure}: {e}")
+        log(f"  date-widget error for {arrival}→{departure}: {e}")
     page.wait_for_timeout(2_000)
 
     if DISCOVERY:
@@ -243,6 +298,11 @@ def check_range(page, payloads: list, arrival: str, departure: str) -> dict:
         (d / "page.html").write_text(page.content())
         page.screenshot(path=str(d / "page.png"), full_page=True)
         log(f"  discovery: {len(payloads)} payloads dumped to {d}")
+
+    if not dates_ok:
+        log(f"  WARN: dates NOT applied for {arrival}→{departure} "
+            f"- skipping evaluation (run DISCOVERY=1 to debug the widget)")
+        return {}
 
     merged = scan_dom(page)
     merged.update(scan_api_payloads(payloads))   # API wins over DOM heuristics
