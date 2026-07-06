@@ -13,6 +13,8 @@ services:
       LEVELS: "${LEVELS:-257,265,21636,10514,259,260,266,258}"
       NOTIFY_ON_ERROR: "${NOTIFY_ON_ERROR:-0}"
       ADULTS: "${ADULTS:-2}"
+      MAX_BACKOFF: "${MAX_BACKOFF:-7200}"
+      FORCE_IPV4: "${FORCE_IPV4:-1}"
     volumes:
       - bakkum_data:/data
 volumes:

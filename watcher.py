@@ -22,10 +22,14 @@ Env vars:
   STATE_FILE       default /data/state.json
   NOTIFY_ON_ERROR  1 = also notify when the check itself fails
   CHECK_INTERVAL   seconds between cycles; 0 = run once and exit
+  MAX_BACKOFF      max sleep after consecutive failed cycles, default 7200
+  FORCE_IPV4       1 (default) = skip IPv6 so errors show the real cause
 """
 
 import json
 import os
+import random
+import socket
 import sys
 import time
 import urllib.request
@@ -53,6 +57,19 @@ NTFY_URL = os.environ.get("NTFY_URL", "")
 HA_WEBHOOK_URL = os.environ.get("HA_WEBHOOK_URL", "")
 STATE_FILE = Path(os.environ.get("STATE_FILE", "/data/state.json"))
 NOTIFY_ON_ERROR = os.environ.get("NOTIFY_ON_ERROR", "0") == "1"
+MAX_BACKOFF = int(os.environ.get("MAX_BACKOFF", "7200"))
+NAME_TTL = 24 * 3600  # re-fetch level names at most once a day
+
+# The container has no IPv6 route; without this, a dropped IPv4 connection
+# surfaces as a misleading "[Errno 101] Network is unreachable" from the
+# failed IPv6 fallback.
+if os.environ.get("FORCE_IPV4", "1") == "1":
+    _orig_getaddrinfo = socket.getaddrinfo
+
+    def _getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+    socket.getaddrinfo = _getaddrinfo_ipv4
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -117,8 +134,13 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
 
+_name_cache = {"names": None, "ts": 0.0}
+
+
 def fetch_level_names() -> dict:
-    """ident -> display name, via the levels endpoint."""
+    """ident -> display name, via the levels endpoint (cached for NAME_TTL)."""
+    if _name_cache["names"] and time.time() - _name_cache["ts"] < NAME_TTL:
+        return _name_cache["names"]
     names = dict(NAME_OVERRIDES)
     try:
         data = api_get("levels", [("lng", "de"), ("decode_htmlentities", "true")])
@@ -127,8 +149,12 @@ def fetch_level_names() -> dict:
             name = (lvl.get("name") or "").strip()
             if ident and name and ident not in NAME_OVERRIDES:
                 names[ident] = name
+        _name_cache["names"] = names
+        _name_cache["ts"] = time.time()
     except Exception as e:
         log(f"level-name fetch failed (using idents): {e}")
+        if _name_cache["names"]:
+            return _name_cache["names"]
     return names
 
 
@@ -204,14 +230,28 @@ def main() -> int:
             log(f"  ❌ {name}: nichts ≥ {MIN_NIGHTS} Nächte im Fenster")
         time.sleep(1)   # be polite
 
+    state = load_state()
+
     if errors == len(LEVELS):
         log("all API calls failed")
-        if NOTIFY_ON_ERROR:
-            notify("Bakkum-Watcher Fehler", "Alle API-Aufrufe fehlgeschlagen.",
-                   priority="default")
+        if not state.get("error_since"):
+            state["error_since"] = datetime.now().isoformat(timespec="seconds")
+            save_state(state)
+            if NOTIFY_ON_ERROR:
+                notify("Bakkum-Watcher Fehler",
+                       "Alle API-Aufrufe fehlgeschlagen. "
+                       "Weitere Meldung erst bei Erholung.",
+                       priority="default")
+        else:
+            log(f"still failing since {state['error_since']} (no re-notify)")
         return 1
 
-    state = load_state()
+    if state.get("error_since"):
+        if NOTIFY_ON_ERROR:
+            notify("Bakkum-Watcher wieder ok",
+                   f"API wieder erreichbar (Ausfall seit "
+                   f"{state['error_since']}).", priority="default")
+        state.pop("error_since", None)
     prev = {cat: {tuple(x[:2]) for x in v}
             for cat, v in state.get("availability", {}).items()}
 
@@ -239,12 +279,19 @@ def main() -> int:
 if __name__ == "__main__":
     interval = int(os.environ.get("CHECK_INTERVAL", "0"))
     if interval > 0:
+        failures = 0
         while True:
             try:
-                main()
+                rc = main()
             except Exception as e:
                 log(f"cycle failed: {e}")
-            log(f"sleeping {interval}s")
-            time.sleep(interval)
+                rc = 1
+            failures = failures + 1 if rc else 0
+            sleep_s = min(interval * 2 ** failures, MAX_BACKOFF) if failures \
+                else interval
+            sleep_s = int(sleep_s * random.uniform(0.9, 1.1))  # jitter
+            log(f"sleeping {sleep_s}s"
+                + (f" (backoff after {failures} failed cycles)" if failures else ""))
+            time.sleep(sleep_s)
     else:
         sys.exit(main())
