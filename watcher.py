@@ -32,9 +32,11 @@ import random
 import socket
 import sys
 import time
+import urllib.error
 import urllib.request
 import urllib.parse
 from datetime import datetime, date
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 RESORT = "kdc-bakkum"
@@ -84,12 +86,48 @@ def log(msg: str) -> None:
     print(f"[{datetime.now().isoformat(timespec='seconds')}] {msg}", flush=True)
 
 
+# set when the server sends Retry-After; no API calls before this timestamp
+_blocked_until = 0.0
+
+
+def _parse_retry_after(value):
+    """Retry-After header -> seconds (int) or None. Accepts delta or HTTP-date."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        dt = parsedate_to_datetime(value)
+        return max(0, int((dt - datetime.now(dt.tzinfo)).total_seconds()))
+    except Exception:
+        return None
+
+
 def api_get(path: str, params: list) -> dict:
+    global _blocked_until
+    wait = _blocked_until - time.time()
+    if wait > 0:
+        raise RuntimeError(f"skipped, Retry-After active for {int(wait)}s more")
     qs = urllib.parse.urlencode(params)
     url = f"{API_BASE}/{path}?{qs}"
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        retry_after = e.headers.get("Retry-After")
+        try:
+            body = " ".join(e.read(500).decode(errors="replace").split())
+        except Exception:
+            body = ""
+        log(f"HTTP {e.code} on {path}: Retry-After={retry_after!r}"
+            + (f", body: {body}" if body else ""))
+        secs = _parse_retry_after(retry_after)
+        if secs:
+            _blocked_until = time.time() + secs
+            log(f"honoring Retry-After: no API calls for {secs}s")
+        raise
 
 
 def notify(title: str, body: str, priority: str = "high") -> None:
@@ -289,7 +327,11 @@ if __name__ == "__main__":
             failures = failures + 1 if rc else 0
             sleep_s = min(interval * 2 ** failures, MAX_BACKOFF) if failures \
                 else interval
-            sleep_s = int(sleep_s * random.uniform(0.9, 1.1))  # jitter
+            sleep_s = int(sleep_s * random.uniform(0.9, 1.1))  # ±10% jitter
+            blocked = _blocked_until - time.time()
+            if blocked > sleep_s:
+                sleep_s = int(blocked) + random.randint(5, 60)
+                log(f"Retry-After active, extending sleep to {sleep_s}s")
             log(f"sleeping {sleep_s}s"
                 + (f" (backoff after {failures} failed cycles)" if failures else ""))
             time.sleep(sleep_s)
